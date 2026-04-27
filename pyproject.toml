@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autotest-agent"
+version = "0.1.0"
+description = "Autonomous test generation from JIRA tickets using RAG and Multi-Agent workflows"
+requires-python = ">=3.10"
+
+dependencies = [
+    "typer>=0.9.0",
+    "rich>=13.0.0",
+    "jira>=3.8.0",
+    "langchain-google-genai>=2.0.0",
+    "langchain-community>=0.3.0",
+    "langchain>=0.3.0",
+    "langgraph>=0.2.0",
+    "faiss-cpu>=1.8.0",
+    "sentence-transformers>=3.0.0",
+    "langchain-huggingface>=0.1.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "pyyaml>=6.0",
+    "PyGithub>=2.0.0",
+    "pytest>=8.0.0",
+    "requests-mock>=1.12.0",
+    "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.4.0",
+    "mypy>=1.10.0",
+]
+
+[project.scripts]
+autotest = "main:app"
+
+[tool.setuptools.packages.find]
+include = ["autotest_agent*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
