@@ -26,6 +26,7 @@ dependencies = [
     "pytest>=8.0.0",
     "requests-mock>=1.12.0",
     "requests>=2.31.0",
+    "PySide6>=6.7.0",
 ]
 
 [project.optional-dependencies]
@@ -36,6 +37,10 @@ dev = [
 
 [project.scripts]
 autotest = "main:app"
+autotest-gui = "gui_app:main"
+
+[tool.setuptools]
+py-modules = ["main", "gui_app"]
 
 [tool.setuptools.packages.find]
 include = ["autotest_agent*"]

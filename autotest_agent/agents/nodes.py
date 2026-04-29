@@ -17,6 +17,7 @@ Usage:
 from __future__ import annotations
 
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 from rich.console import Console
@@ -28,9 +29,6 @@ from autotest_agent.config import PocSettings
 from autotest_agent.domain.models import GeneratedTest, GraphState, TestPlan
 from autotest_agent.domain.ports import GitPort, LLMPort, RAGPort, TestRunnerPort
 from autotest_agent.infrastructure.output_paths import resolve_generated_test_path
-
-console = Console()
-
 
 def _build_failure_summary(output: str, error_log: str, limit: int = 1500) -> str:
     combined = "\n".join(part for part in [output.strip(), error_log.strip()] if part).strip()
@@ -63,6 +61,9 @@ class NodeContainer:
         target_framework_path: str,
         skip_github: bool = False,
         poc: PocSettings | None = None,
+        console: Console | None = None,
+        text_input: Callable[[str], str] | None = None,
+        user_log: Callable[[str, str], None] | None = None,
     ) -> None:
         self.llm = llm
         self.rag = rag
@@ -72,6 +73,13 @@ class NodeContainer:
         self.target_framework_path = target_framework_path
         self.skip_github = skip_github
         self._poc = poc or PocSettings(enabled=False)
+        self.console = console or Console()
+        self._text_input = text_input or self.console.input
+        self._user_log = user_log
+
+    def _u(self, level: str, msg: str) -> None:
+        if self._user_log is not None:
+            self._user_log(level, msg)
 
     def _rag_chunks_analyze(self) -> int:
         return self._poc.analyze_rag_chunks if self._poc.enabled else 5
@@ -91,7 +99,8 @@ class NodeContainer:
         After this node the state will have a `plan` key.
         """
         ticket = state["ticket"]
-        console.print(f"\n[bold blue]Analyzing ticket {ticket.id}...[/bold blue]")
+        self.console.print(f"\n[bold blue]Analyzing ticket {ticket.id}...[/bold blue]")
+        self._u("INFO", "Analyzing ticket requirements and existing code context.")
 
         query_text = f"{ticket.title}\n{ticket.description}"
         relevant_chunks = self.rag.query(query_text)
@@ -145,9 +154,10 @@ class NodeContainer:
         cap = self._poc.max_test_scenarios
         plan = plan.model_copy(update={"test_scenarios": plan.test_scenarios[:cap]})
 
-        console.print(f"[green]Test plan created with {len(plan.test_scenarios)} scenarios[/green]")
+        self.console.print(f"[green]Test plan created with {len(plan.test_scenarios)} scenarios[/green]")
         for i, scenario in enumerate(plan.test_scenarios, 1):
-            console.print(f"  {i}. {scenario}")
+            self.console.print(f"  {i}. {scenario}")
+        self._u("SUCCESS", f"Created test plan with {len(plan.test_scenarios)} scenarios.")
 
         return {"plan": plan, "phase": "analyze_complete"}
 
@@ -168,12 +178,14 @@ class NodeContainer:
         error_history = state.get("error_history", [])
 
         if retry_count > 0:
-            console.print(
+            self.console.print(
                 f"\n[bold yellow]Retry {retry_count}: regenerating code...[/bold yellow]"
             )
             system_prompt = self.prompts.build_fix_prompt()
+            self._u("WARN", f"Fixing test code based on previous pytest errors (retry {retry_count}).")
         else:
-            console.print("\n[bold blue]Generating test code...[/bold blue]")
+            self.console.print("\n[bold blue]Generating test code...[/bold blue]")
+            self._u("INFO", "Generating automation tests from the plan.")
             system_prompt = self.prompts.build_generate_prompt()
 
         n_gen = self._rag_chunks_generate()
@@ -213,7 +225,8 @@ class NodeContainer:
             self.target_framework_path,
         )
         result = result.model_copy(update={"file_path": forced_path})
-        console.print(f"[green]Generated test file: {result.file_path}[/green]")
+        self.console.print(f"[green]Generated test file: {result.file_path}[/green]")
+        self._u("SUCCESS", f"Generated test file at {result.file_path}.")
 
         return {"generated_test": result, "phase": "generate_complete"}
 
@@ -234,21 +247,24 @@ class NodeContainer:
         retry_count = state.get("retry_count", 0)
         error_history = list(state.get("error_history", []))
 
-        console.print(f"\n[bold blue]Writing test to {generated.file_path}...[/bold blue]")
+        self.console.print(f"\n[bold blue]Writing test to {generated.file_path}...[/bold blue]")
         test_path = Path(generated.file_path)
         test_path.parent.mkdir(parents=True, exist_ok=True)
         test_path.write_text(generated.code, encoding="utf-8")
 
-        console.print("[bold blue]Running pytest...[/bold blue]")
+        self.console.print("[bold blue]Running pytest...[/bold blue]")
+        self._u("INFO", "Running pytest to verify generated tests.")
         verification = self.test_runner.run_tests(str(test_path))
 
         if verification.passed:
-            console.print("[bold green]All tests passed![/bold green]")
+            self.console.print("[bold green]All tests passed![/bold green]")
+            self._u("SUCCESS", "Generated tests passed.")
         else:
-            console.print("[bold red]Tests failed.[/bold red]")
-            console.print(verification.output[:2000])
+            self.console.print("[bold red]Tests failed.[/bold red]")
+            self.console.print(verification.output[:2000])
             error_history.append(verification.output + "\n" + verification.error_log)
             retry_count += 1
+            self._u("WARN", "Generated tests failed. Retrying with failure feedback.")
 
         return {
             "verification": verification,
@@ -279,18 +295,20 @@ class NodeContainer:
                 verification.error_log,
             )
 
-        console.print("\n[bold]Generated test code for your review:[/bold]")
-        console.print(Panel(
+        self.console.print("\n[bold]Generated test code for your review:[/bold]")
+        self.console.print(Panel(
             Syntax(generated.code, "python", theme="monokai", line_numbers=True),
             title=generated.file_path,
         ))
-        console.print(f"\n[dim]{generated.explanation}[/dim]\n")
+        self.console.print(f"\n[dim]{generated.explanation}[/dim]\n")
+        self._u("INFO", "Awaiting your approval to finish deployment.")
         if tests_failed:
-            console.print(
+            self.console.print(
                 "[bold yellow]Generated tests still failed after all retries. "
                 "You can still create a PR with the failing output.[/bold yellow]"
             )
-            console.print(Panel(failure_summary, title="Latest pytest failure", border_style="yellow"))
+            self.console.print(Panel(failure_summary, title="Latest pytest failure", border_style="yellow"))
+            self._u("WARN", "Tests still failing after retries. You can still approve deployment.")
 
         if self.skip_github and tests_failed:
             prompt = (
@@ -310,21 +328,24 @@ class NodeContainer:
         else:
             prompt = "[bold yellow]Approve and create PR? (y/N): [/bold yellow]"
 
-        approved = console.input(prompt)
+        approved = self._text_input(prompt)
         if approved.strip().lower() != "y":
-            console.print("[red]Cancelled by user.[/red]")
+            self.console.print("[red]Cancelled by user.[/red]")
+            self._u("WARN", "Deployment cancelled by user.")
             return {"phase": "cancelled"}
 
         if self.skip_github:
-            console.print(
+            self.console.print(
                 "\n[bold green]Done. Test file is on disk; GitHub step was skipped.[/bold green]"
             )
+            self._u("SUCCESS", "Completed locally. GitHub was skipped.")
             return {
                 "phase": "completed_local_with_failed_tests" if tests_failed else "completed_local"
             }
 
         branch_name = f"autotest/{ticket.id}"
-        console.print(f"[blue]Creating branch {branch_name}...[/blue]")
+        self.console.print(f"[blue]Creating branch {branch_name}...[/blue]")
+        self._u("INFO", "Creating GitHub branch and opening pull request.")
         self.git.create_branch(branch_name)
 
         commit_msg = f"test: add tests for {ticket.id} - {ticket.title}"
@@ -354,5 +375,6 @@ class NodeContainer:
             branch_name=branch_name,
         )
 
-        console.print(f"\n[bold green]PR created: {pr_url}[/bold green]")
+        self.console.print(f"\n[bold green]PR created: {pr_url}[/bold green]")
+        self._u("SUCCESS", f"Pull request created: {pr_url}")
         return {"phase": "deployed_with_failed_tests" if tests_failed else "deployed"}
