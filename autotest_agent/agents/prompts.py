@@ -76,3 +76,11 @@ class PromptBuilder:
             "Pay close attention to the error output and the coding rules.\n\n"
             "# Coding Standards & Rules\n" + self._knowledge_base_md
         )
+
+    def build_matrix_csv_prompt(self) -> str:
+        return (
+            "You are a QA documentation specialist. Expand the analyzed ticket into a test matrix. "
+            "Return JSON only with key `rows`, where each row has: "
+            "`testcase`, `description`, `pre_condition`, `test_steps`, `expected_results`.\n\n"
+            "# Rules\n" + self._knowledge_base_md
+        )

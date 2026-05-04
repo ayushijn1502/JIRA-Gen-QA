@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import TypedDict
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 # ---------------------------------------------------------------------------
 # Pydantic models (validated, serialisable)
@@ -68,6 +68,34 @@ class GeneratedTest(BaseModel):
     )
 
 
+class TestMatrixRow(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    testcase: str = Field(description="Test case identifier/title")
+    description: str = Field(
+        description="Short description of the case",
+        validation_alias=AliasChoices("description", "Description"),
+    )
+    pre_condition: str = Field(
+        description="Required preconditions",
+        validation_alias=AliasChoices("pre_condition", "PreCondition"),
+    )
+    test_steps: str = Field(
+        description="Execution steps",
+        validation_alias=AliasChoices("test_steps", "TestSteps"),
+    )
+    expected_results: str = Field(
+        description="Expected result",
+        validation_alias=AliasChoices(
+            "expected_results", "Expected Results", "Expected_Results", "ExpectedResults"
+        ),
+    )
+
+
+class TestMatrixDocument(BaseModel):
+    rows: list[TestMatrixRow] = Field(default_factory=list)
+
+
 class VerificationResult(BaseModel):
     """
     The output of the *Verify* step -- did pytest pass or fail,
@@ -101,3 +129,4 @@ class GraphState(TypedDict, total=False):
     max_retries: int
     error_history: list[str]
     phase: str
+    test_matrix_csv_path: str

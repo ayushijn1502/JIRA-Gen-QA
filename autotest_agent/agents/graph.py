@@ -4,7 +4,7 @@ conditional routing (the retry loop).
 
 Think of it like a flowchart:
 
-    [Analyze] -> [Generate] -> [Verify] --pass--> [Deploy]
+    [Analyze] -> [Matrix CSV] -> [Generate] -> [Verify] --pass--> [Deploy]
                      ^                  |
                      |___fail & retries_|
                               |
@@ -53,12 +53,14 @@ def build_graph(container: NodeContainer) -> StateGraph:
     graph = StateGraph(GraphState)
 
     graph.add_node("analyze", container.analyze)
+    graph.add_node("matrix_csv", container.matrix_csv)
     graph.add_node("generate", container.generate)
     graph.add_node("verify", container.verify)
     graph.add_node("deploy", container.deploy)
 
     graph.set_entry_point("analyze")
-    graph.add_edge("analyze", "generate")
+    graph.add_edge("analyze", "matrix_csv")
+    graph.add_edge("matrix_csv", "generate")
     graph.add_edge("generate", "verify")
     graph.add_conditional_edges(
         "verify",

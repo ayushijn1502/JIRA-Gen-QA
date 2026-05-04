@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from typing import Any, TypeVar, get_origin
+from typing import Any, TypeVar, get_args, get_origin
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -226,6 +226,11 @@ def _minimal_data_example_dict(model_cls: type[BaseModel]) -> dict[str, Any]:
         ann = finfo.annotation
         origin = get_origin(ann)
         if origin is list:
+            args = get_args(ann)
+            elem_type = args[0] if args else None
+            if isinstance(elem_type, type) and issubclass(elem_type, BaseModel):
+                out[name] = [_minimal_data_example_dict(elem_type)]
+                continue
             if name == "relevant_context":
                 out[name] = []
             elif name == "test_scenarios":

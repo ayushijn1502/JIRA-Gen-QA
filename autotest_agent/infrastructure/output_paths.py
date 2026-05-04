@@ -57,3 +57,15 @@ def resolve_generated_test_path(
         return str(out_file.relative_to(repo_root)).replace("\\", "/")
     except ValueError:
         return str(out_file)
+
+
+def resolve_matrix_csv_path(ticket_id: str, target_framework_path: str) -> str:
+    """
+    Resolve where to save the generated test matrix CSV.
+    """
+    fw = Path(target_framework_path).expanduser().resolve()
+    out_dir = (fw / "artifacts").resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    safe_ticket = re.sub(r"[^a-zA-Z0-9]+", "_", ticket_id).strip("_").lower() or "ticket"
+    out_file = out_dir / f"{safe_ticket}_test_matrix.csv"
+    return str(out_file)

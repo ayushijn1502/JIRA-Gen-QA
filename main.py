@@ -131,17 +131,25 @@ def execute_run(
     console: Console | None = None,
     text_input: Callable[[str], str] | None = None,
     user_log: Callable[[str, str], None] | None = None,
+    on_stage: Callable[[str], None] | None = None,
+    on_matrix_csv: Callable[[str], None] | None = None,
 ) -> str:
     def u(level: str, msg: str) -> None:
         if user_log is not None:
             user_log(level, msg)
 
+    def s(stage_id: str) -> None:
+        if on_stage is not None:
+            on_stage(stage_id)
+
     with _pipeline_console(user_log, console) as out:
         try:
             out.print("[bold]AutoTest-Agent starting...[/bold]\n")
             u("INFO", "Starting pipeline.")
+            s("started")
             settings, jira, rag, llm, git, runner, prompts, skip_github = _build_services(config)
             u("INFO", "Configuration loaded.")
+            s("settings")
             if settings.github.enabled and skip_github:
                 u(
                     "WARN",
@@ -152,11 +160,13 @@ def execute_run(
             if settings.gemini.run_preflight:
                 out.print("[blue]Checking Gemini API key and model...[/blue]")
                 u("INFO", "Checking AI service connection.")
+                s("gemini_check")
                 preflight_gemini(settings.gemini.api_key, settings.gemini.model_name)
                 out.print("[green]Gemini preflight OK.[/green]\n")
                 u("SUCCESS", "AI service is reachable.")
             else:
                 out.print("[dim]Gemini preflight skipped (gemini.run_preflight: false).[/dim]\n")
+                s("gemini_check")
 
             out.print(
                 f"[dim]LLM: gemini ({settings.gemini.model_name}); "
@@ -170,11 +180,13 @@ def execute_run(
 
             out.print("[blue]Indexing target framework for RAG...[/blue]")
             u("INFO", "Reading existing framework code for context.")
+            s("indexing")
             rag.index_codebase(settings.target_framework_path)
             u("SUCCESS", "Framework context indexed.")
 
             out.print(f"[blue]Fetching JIRA ticket {ticket_id}...[/blue]")
             u("INFO", f"Reading JIRA ticket {ticket_id}.")
+            s("jira_fetch")
             ticket = jira.fetch_ticket(ticket_id)
             u("SUCCESS", f"Loaded ticket {ticket.id}: {ticket.title}")
 
@@ -190,6 +202,8 @@ def execute_run(
                 console=out,
                 text_input=text_input,
                 user_log=user_log,
+                on_stage=on_stage,
+                on_matrix_csv=on_matrix_csv,
             )
             graph = build_graph(container)
             initial_state = {
@@ -214,31 +228,39 @@ def execute_run(
             if phase == "deployed":
                 out.print("\n[bold green]Done! PR has been created.[/bold green]")
                 u("SUCCESS", "Completed successfully. Pull request created.")
+                s("done")
             elif phase == "deployed_with_failed_tests":
                 out.print(
                     "\n[bold yellow]Done! PR has been created, but the generated tests still failed.[/bold yellow]"
                 )
                 u("WARN", "PR created, but generated tests are still failing.")
+                s("done")
             elif phase == "completed_local":
                 out.print("\n[bold green]Done! Tests generated and saved locally (no PR).[/bold green]")
                 u("SUCCESS", "Completed successfully. Tests saved locally.")
+                s("done")
             elif phase == "completed_local_with_failed_tests":
                 out.print(
                     "\n[bold yellow]Done! Tests were saved locally, but they still failed after retries.[/bold yellow]"
                 )
                 u("WARN", "Tests saved locally, but they are still failing.")
+                s("done")
             elif phase == "cancelled":
                 out.print("\n[yellow]Run cancelled by user.[/yellow]")
                 u("WARN", "Run cancelled by user.")
+                s("done")
             elif phase == "failed":
                 out.print("\n[bold red]Pipeline failed after max retries.[/bold red]")
                 u("ERROR", "Pipeline failed after maximum retries.")
+                s("done")
             else:
                 out.print(f"\n[dim]Pipeline ended in phase: {phase}[/dim]")
                 u("INFO", f"Pipeline ended in phase: {phase}.")
+                s("done")
             return phase
         except Exception as exc:
             u("ERROR", _friendly_error(exc))
+            s("error")
             raise
 
 

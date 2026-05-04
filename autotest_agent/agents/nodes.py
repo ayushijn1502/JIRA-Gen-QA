@@ -17,6 +17,7 @@ Usage:
 from __future__ import annotations
 
 from pathlib import Path
+import csv
 from collections.abc import Callable
 from typing import Any
 
@@ -26,9 +27,12 @@ from rich.syntax import Syntax
 
 from autotest_agent.agents.prompts import PromptBuilder
 from autotest_agent.config import PocSettings
-from autotest_agent.domain.models import GeneratedTest, GraphState, TestPlan
+from autotest_agent.domain.models import GeneratedTest, GraphState, TestMatrixDocument, TestPlan
 from autotest_agent.domain.ports import GitPort, LLMPort, RAGPort, TestRunnerPort
-from autotest_agent.infrastructure.output_paths import resolve_generated_test_path
+from autotest_agent.infrastructure.output_paths import (
+    resolve_generated_test_path,
+    resolve_matrix_csv_path,
+)
 
 def _build_failure_summary(output: str, error_log: str, limit: int = 1500) -> str:
     combined = "\n".join(part for part in [output.strip(), error_log.strip()] if part).strip()
@@ -64,6 +68,8 @@ class NodeContainer:
         console: Console | None = None,
         text_input: Callable[[str], str] | None = None,
         user_log: Callable[[str, str], None] | None = None,
+        on_stage: Callable[[str], None] | None = None,
+        on_matrix_csv: Callable[[str], None] | None = None,
     ) -> None:
         self.llm = llm
         self.rag = rag
@@ -76,10 +82,16 @@ class NodeContainer:
         self.console = console or Console()
         self._text_input = text_input or self.console.input
         self._user_log = user_log
+        self._on_stage = on_stage
+        self._on_matrix_csv = on_matrix_csv
 
     def _u(self, level: str, msg: str) -> None:
         if self._user_log is not None:
             self._user_log(level, msg)
+
+    def _stage(self, stage_id: str) -> None:
+        if self._on_stage is not None:
+            self._on_stage(stage_id)
 
     def _rag_chunks_analyze(self) -> int:
         return self._poc.analyze_rag_chunks if self._poc.enabled else 5
@@ -98,6 +110,7 @@ class NodeContainer:
 
         After this node the state will have a `plan` key.
         """
+        self._stage("analyze")
         ticket = state["ticket"]
         self.console.print(f"\n[bold blue]Analyzing ticket {ticket.id}...[/bold blue]")
         self._u("INFO", "Analyzing ticket requirements and existing code context.")
@@ -161,6 +174,66 @@ class NodeContainer:
 
         return {"plan": plan, "phase": "analyze_complete"}
 
+    def matrix_csv(self, state: GraphState) -> dict[str, Any]:
+        self._stage("matrix_csv")
+        ticket = state["ticket"]
+        plan = state["plan"]
+        out_path = Path(resolve_matrix_csv_path(ticket.id, self.target_framework_path))
+        matrix_doc: TestMatrixDocument | None = None
+        try:
+            system_prompt = self.prompts.build_matrix_csv_prompt()
+            user_prompt = (
+                f"Ticket: {ticket.id}\n"
+                f"Title: {ticket.title}\n"
+                f"Description: {ticket.description}\n\n"
+                "Acceptance Criteria:\n"
+                + "\n".join(f"- {ac}" for ac in ticket.acceptance_criteria)
+                + "\n\nPlanned scenarios:\n"
+                + "\n".join(f"- {scenario}" for scenario in plan.test_scenarios)
+                + "\n\nReturn JSON only."
+            )
+            matrix_doc = self.llm.generate(system_prompt, user_prompt, TestMatrixDocument)
+        except Exception as exc:
+            self.console.print(
+                f"[yellow]Matrix generation fallback enabled due to model parsing error: {exc}[/yellow]"
+            )
+            self._u(
+                "WARN",
+                "Could not parse structured matrix output from model. Using scenario-based fallback rows.",
+            )
+        if matrix_doc is None or not matrix_doc.rows:
+            fallback_rows = [
+                {
+                    "testcase": f"TC-{i:02d}",
+                    "description": scenario,
+                    "pre_condition": "Application is reachable and test data is prepared.",
+                    "test_steps": scenario,
+                    "expected_results": "System behavior matches the scenario expectation.",
+                }
+                for i, scenario in enumerate(plan.test_scenarios, start=1)
+            ]
+            matrix_doc = TestMatrixDocument.model_validate({"rows": fallback_rows})
+        with out_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(
+                ["testcase", "Description", "PreCondition", "TestSteps", "Expected Results"]
+            )
+            for row in matrix_doc.rows:
+                writer.writerow(
+                    [
+                        row.testcase,
+                        row.description,
+                        row.pre_condition,
+                        row.test_steps,
+                        row.expected_results,
+                    ]
+                )
+        self.console.print(f"[green]Test matrix CSV saved: {out_path}[/green]")
+        self._u("SUCCESS", f"Test matrix saved: {out_path}")
+        if self._on_matrix_csv is not None:
+            self._on_matrix_csv(str(out_path))
+        return {"test_matrix_csv_path": str(out_path)}
+
     # ------------------------------------------------------------------
     # Node 2: Generate
     # ------------------------------------------------------------------
@@ -173,6 +246,7 @@ class NodeContainer:
 
         After this node the state will have a `generated_test` key.
         """
+        self._stage("generate")
         plan = state["plan"]
         retry_count = state.get("retry_count", 0)
         error_history = state.get("error_history", [])
@@ -197,6 +271,9 @@ class NodeContainer:
             + "\n\nRelevant existing code:\n"
             + "\n---\n".join(plan.relevant_context[:n_gen])
         )
+        matrix_path = state.get("test_matrix_csv_path")
+        if matrix_path:
+            user_prompt += f"\n\nMatrix CSV path: {matrix_path}"
 
         if error_history:
             user_prompt += (
@@ -243,6 +320,7 @@ class NodeContainer:
         After this node the state will have `verification` and updated
         `retry_count` / `error_history`.
         """
+        self._stage("verify")
         generated = state["generated_test"]
         retry_count = state.get("retry_count", 0)
         error_history = list(state.get("error_history", []))
@@ -284,6 +362,7 @@ class NodeContainer:
 
         This is the last node -- after it runs the workflow is done.
         """
+        self._stage("deploy")
         generated = state["generated_test"]
         ticket = state["ticket"]
         verification = state.get("verification")
