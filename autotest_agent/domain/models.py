@@ -78,7 +78,7 @@ class TestMatrixRow(BaseModel):
     )
     pre_condition: str = Field(
         description="Required preconditions",
-        validation_alias=AliasChoices("pre_condition", "PreCondition"),
+        validation_alias=AliasChoices("pre_condition", "PreCondition", "precondition"),
     )
     test_steps: str = Field(
         description="Execution steps",

@@ -27,11 +27,17 @@ from rich.syntax import Syntax
 
 from autotest_agent.agents.prompts import PromptBuilder
 from autotest_agent.config import PocSettings
-from autotest_agent.domain.models import GeneratedTest, GraphState, TestMatrixDocument, TestPlan
+from autotest_agent.domain.models import (
+    GeneratedTest,
+    GraphState,
+    TestMatrixDocument,
+    TestMatrixRow,
+    TestPlan,
+)
 from autotest_agent.domain.ports import GitPort, LLMPort, RAGPort, TestRunnerPort
 from autotest_agent.infrastructure.output_paths import (
     resolve_generated_test_path,
-    resolve_matrix_csv_path,
+    resolve_test_matrix_csv_path,
 )
 
 def _build_failure_summary(output: str, error_log: str, limit: int = 1500) -> str:
@@ -41,6 +47,29 @@ def _build_failure_summary(output: str, error_log: str, limit: int = 1500) -> st
     if len(combined) <= limit:
         return combined
     return combined[:limit].rstrip() + "\n... [truncated]"
+
+
+def _normalize_test_matrix_rows(doc: TestMatrixDocument, ticket_id: str) -> TestMatrixDocument:
+    """Strip fields and ensure non-empty CSV-safe values after LLM output."""
+    cleaned: list[TestMatrixRow] = []
+    for i, r in enumerate(doc.rows):
+        tc = (r.testcase or "").strip() or f"{ticket_id} — Case {i + 1}"
+        if len(tc) > 120:
+            tc = tc[:117].rstrip() + "..."
+        desc = (r.description or "").strip() or "N/A"
+        pre = (r.pre_condition or "").strip() or "N/A"
+        steps = (r.test_steps or "").strip() or "N/A"
+        exp = (r.expected_results or "").strip() or "N/A"
+        cleaned.append(
+            TestMatrixRow(
+                testcase=tc,
+                description=desc,
+                pre_condition=pre,
+                test_steps=steps,
+                expected_results=exp,
+            )
+        )
+    return TestMatrixDocument(rows=cleaned)
 
 
 class NodeContainer:
@@ -175,64 +204,103 @@ class NodeContainer:
         return {"plan": plan, "phase": "analyze_complete"}
 
     def matrix_csv(self, state: GraphState) -> dict[str, Any]:
-        self._stage("matrix_csv")
+        """
+        Turn the ticket + test plan into a formal CSV matrix on disk.
+        After this node the state has ``test_matrix_csv_path``.
+        """
         ticket = state["ticket"]
         plan = state["plan"]
-        out_path = Path(resolve_matrix_csv_path(ticket.id, self.target_framework_path))
-        matrix_doc: TestMatrixDocument | None = None
-        try:
-            system_prompt = self.prompts.build_matrix_csv_prompt()
-            user_prompt = (
-                f"Ticket: {ticket.id}\n"
-                f"Title: {ticket.title}\n"
-                f"Description: {ticket.description}\n\n"
-                "Acceptance Criteria:\n"
-                + "\n".join(f"- {ac}" for ac in ticket.acceptance_criteria)
-                + "\n\nPlanned scenarios:\n"
-                + "\n".join(f"- {scenario}" for scenario in plan.test_scenarios)
-                + "\n\nReturn JSON only."
+        self._stage("matrix_csv")
+        self.console.print(
+            f"\n[bold blue]Building test-case matrix CSV for {ticket.id}...[/bold blue]"
+        )
+        self._u(
+            "INFO",
+            "Creating the test-case matrix (spreadsheet-style) before writing automation…",
+        )
+
+        out_path = resolve_test_matrix_csv_path(ticket.id, self.target_framework_path)
+        system_prompt = self.prompts.build_test_matrix_prompt()
+        user_prompt = (
+            f"JIRA Ticket: {ticket.id}\n"
+            f"Title: {ticket.title}\n"
+            f"Description:\n{ticket.description}\n\n"
+            f"Acceptance Criteria:\n"
+            + "\n".join(f"- {ac}" for ac in ticket.acceptance_criteria)
+            + "\n\nTest plan from analysis:\n"
+            f"Target file: {plan.target_file}\n"
+            f"Scenarios:\n"
+            + "\n".join(f"- {s}" for s in plan.test_scenarios)
+            + "\n\nYour entire answer must be ONE JSON object only: start with { and end with }. "
+            'Shape: {"rows": [ {"testcase": "...", "description": "...", "precondition": "...", '
+            '"test_steps": "...", "expected_results": "..." }, ... ] }. '
+            "No markdown fences, no text outside the JSON."
+        )
+        if self._poc.max_test_scenarios == 2 or self._poc.enabled:
+            user_prompt += (
+                "\n\nLIMIT: Match the number of scenarios in the plan (typically two rows: "
+                "one positive, one negative)."
             )
-            matrix_doc = self.llm.generate(system_prompt, user_prompt, TestMatrixDocument)
-        except Exception as exc:
-            self.console.print(
-                f"[yellow]Matrix generation fallback enabled due to model parsing error: {exc}[/yellow]"
+
+        doc: TestMatrixDocument = self.llm.generate(
+            system_prompt, user_prompt, TestMatrixDocument
+        )
+        if not doc.rows:
+            doc = TestMatrixDocument(
+                rows=[
+                    TestMatrixRow(
+                        testcase=(s[:120] if len(s) > 120 else s) or "scenario",
+                        description=s,
+                        pre_condition="Application under test is available.",
+                        test_steps=(
+                            "1. Execute the scenario as described in the JIRA ticket.\n"
+                            "2. Observe actual behavior."
+                        ),
+                        expected_results="Behavior matches the ticket and acceptance criteria.",
+                    )
+                    for s in plan.test_scenarios
+                ]
             )
-            self._u(
-                "WARN",
-                "Could not parse structured matrix output from model. Using scenario-based fallback rows.",
+        if not doc.rows:
+            doc = TestMatrixDocument(
+                rows=[
+                    TestMatrixRow(
+                        testcase=ticket.id,
+                        description=ticket.title,
+                        pre_condition="N/A",
+                        test_steps="Follow the ticket description and acceptance criteria.",
+                        expected_results="All acceptance criteria satisfied.",
+                    )
+                ]
             )
-        if matrix_doc is None or not matrix_doc.rows:
-            fallback_rows = [
-                {
-                    "testcase": f"TC-{i:02d}",
-                    "description": scenario,
-                    "pre_condition": "Application is reachable and test data is prepared.",
-                    "test_steps": scenario,
-                    "expected_results": "System behavior matches the scenario expectation.",
-                }
-                for i, scenario in enumerate(plan.test_scenarios, start=1)
-            ]
-            matrix_doc = TestMatrixDocument.model_validate({"rows": fallback_rows})
-        with out_path.open("w", encoding="utf-8", newline="") as handle:
-            writer = csv.writer(handle)
-            writer.writerow(
-                ["testcase", "Description", "PreCondition", "TestSteps", "Expected Results"]
-            )
-            for row in matrix_doc.rows:
+
+        doc = _normalize_test_matrix_rows(doc, ticket.id)
+
+        headers = ["testcase", "Description", "PreCondition", "TestSteps", "Expected Results"]
+        abs_path = str(out_path.resolve())
+        with out_path.open("w", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(headers)
+            for r in doc.rows:
                 writer.writerow(
                     [
-                        row.testcase,
-                        row.description,
-                        row.pre_condition,
-                        row.test_steps,
-                        row.expected_results,
+                        r.testcase,
+                        r.description,
+                        r.pre_condition,
+                        r.test_steps,
+                        r.expected_results,
                     ]
                 )
-        self.console.print(f"[green]Test matrix CSV saved: {out_path}[/green]")
-        self._u("SUCCESS", f"Test matrix saved: {out_path}")
+
+        self.console.print(f"[green]Test matrix written to {abs_path}[/green]")
+        self._u(
+            "SUCCESS",
+            f"Test matrix saved ({len(doc.rows)} row(s)) — {abs_path}",
+        )
         if self._on_matrix_csv is not None:
-            self._on_matrix_csv(str(out_path))
-        return {"test_matrix_csv_path": str(out_path)}
+            self._on_matrix_csv(abs_path)
+
+        return {"test_matrix_csv_path": abs_path, "phase": "matrix_csv_complete"}
 
     # ------------------------------------------------------------------
     # Node 2: Generate

@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+
+# Local / generated
+.pytest_cache/
+target_framework/artifacts/
+*.pyc
+
+# Optional: keep a private copy with real secrets (not tracked)
+# config.local.yaml

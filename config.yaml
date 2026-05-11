@@ -1,30 +1,29 @@
 # AutoTest-Agent Configuration
-# Keep real secrets out of git. Export them locally instead:
-#   AUTOTEST_JIRA__API_TOKEN
-#   AUTOTEST_GEMINI__API_KEY
-#   AUTOTEST_GITHUB__TOKEN
+# Keep real secrets out of git. Set them locally instead, for example:
+#   $env:AUTOTEST_JIRA__API_TOKEN = "..."   # PowerShell
+#   $env:AUTOTEST_GEMINI__API_KEY = "..."
+#   $env:AUTOTEST_GITHUB__TOKEN = "..."
 #
 # LLM: Google Gemini only (see docs/free-llm-setup.md).
 
 jira:
-  url: "https://ayushijn1502.atlassian.net"
-  email: "ayushijn1502@gmail.com"
-  api_token: "ATATT3xFfGF0lz1tnphu6PpyxlZLsHG_DdAxikGfHjiUhi0oaFPkJDqTcy4jkvrV04XUkeMupk532t3keiNU3_80s_T55opVVE7a3TdkYEWZwkHlGjLOZ670NoY1j486N_6nxE0rtsrzT_DVPB6bqFsUIVYslsZclJ7WaCmfqf7-nSEaXo6TliQ=0CB42F7E"
+  url: "https://your-domain.atlassian.net/"
+  email: "your-email@example.com"
+  api_token: ""
 
 # Free-tier: prefer flash-lite. Docs: https://ai.google.dev/gemini-api/docs/models/gemini
 gemini:
-  api_key: "AIzaSyCoDxbiM7-z54hoVkuuFDqtrJah_f0zSbY"
+  api_key: ""
   model_name: "gemini-2.5-flash-lite"
   max_output_tokens: 8192
   max_total_tokens_per_run: 80000
   run_preflight: true
 
-# Enable GitHub delivery when AUTOTEST_GITHUB__TOKEN is exported locally.
 github:
   enabled: true
-  github_token: ${GITHUB_TOKEN}
-  repo: "ayushijn1502/JIRA-Gen-QA"
-  base_branch: "master"
+  token: ""
+  repo: "owner/repo-name"
+  base_branch: "main"
 
 rag:
   embedding_model: "all-MiniLM-L6-v2"
@@ -32,7 +31,6 @@ rag:
   chunk_overlap: 200
   top_k: 5
 
-# Two scenarios by default (pos + neg); small RAG windows when enabled.
 poc:
   enabled: true
   analyze_rag_chunks: 2

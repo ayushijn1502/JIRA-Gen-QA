@@ -69,3 +69,8 @@ def resolve_matrix_csv_path(ticket_id: str, target_framework_path: str) -> str:
     safe_ticket = re.sub(r"[^a-zA-Z0-9]+", "_", ticket_id).strip("_").lower() or "ticket"
     out_file = out_dir / f"{safe_ticket}_test_matrix.csv"
     return str(out_file)
+
+
+def resolve_test_matrix_csv_path(ticket_id: str, target_framework_path: str) -> Path:
+    """Same destination as ``resolve_matrix_csv_path``; returns a ``Path`` for matrix writes."""
+    return Path(resolve_matrix_csv_path(ticket_id, target_framework_path))

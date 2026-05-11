@@ -77,10 +77,22 @@ class PromptBuilder:
             "# Coding Standards & Rules\n" + self._knowledge_base_md
         )
 
-    def build_matrix_csv_prompt(self) -> str:
-        return (
-            "You are a QA documentation specialist. Expand the analyzed ticket into a test matrix. "
-            "Return JSON only with key `rows`, where each row has: "
-            "`testcase`, `description`, `pre_condition`, `test_steps`, `expected_results`.\n\n"
-            "# Rules\n" + self._knowledge_base_md
+    def build_test_matrix_prompt(self) -> str:
+        """System prompt for the matrix_csv node — test case CSV before codegen."""
+        matrix_rules = self._read("test_matrix.md")
+        hard_constraints = (
+            "\n\n# Hard constraints (do not violate)\n"
+            "- Every row: all five fields are non-empty strings; use `N/A` only as allowed in the rules.\n"
+            "- `testcase`: unique short title per row; include the JIRA key from the user message when possible.\n"
+            "- `test_steps`: always numbered lines (1. 2. …), newline-separated.\n"
+            "- Output must be a single JSON object with key `rows` only; no markdown fences.\n"
         )
+        return (
+            "You are a senior QA analyst. Expand the JIRA ticket and test plan into "
+            "a formal test-case matrix (rows for a spreadsheet).\n\n"
+            + (matrix_rules if matrix_rules else "# Rules\nProduce detailed matrix rows.\n")
+            + hard_constraints
+            + "\n\n# Agent Roles\n"
+            + self._agents_md
+        )
+
