@@ -71,6 +71,10 @@ class LLMPort(ABC):
         Pydantic model.  Otherwise return raw text.
         """
 
+    @abstractmethod
+    def chat(self, messages: list[tuple[str, str]]) -> str:
+        """Multi-turn chat. Each item is (role, content) where role is 'system'|'user'|'assistant'."""
+
 
 class GitPort(ABC):
     """Anything that can push code to GitHub and open a pull request."""

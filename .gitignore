@@ -11,6 +11,8 @@ venv/
 # Local / generated
 .pytest_cache/
 target_framework/artifacts/
+conversation_qa/output/*
+!conversation_qa/output/.gitkeep
 *.pyc
 
 # Optional: keep a private copy with real secrets (not tracked)

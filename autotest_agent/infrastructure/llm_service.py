@@ -22,13 +22,19 @@ import re
 import time
 from typing import Any, TypeVar, get_args, get_origin
 
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, ValidationError
 
 from autotest_agent.domain.ports import LLMPort
 
 T = TypeVar("T", bound=BaseModel)
+
+_ROLE_MAP = {
+    "system": SystemMessage,
+    "user": HumanMessage,
+    "assistant": AIMessage,
+}
 
 
 class GeminiLLMService(LLMPort):
@@ -82,6 +88,12 @@ class GeminiLLMService(LLMPort):
 
         response = self._invoke_with_retry(messages)
         return response.content
+
+    def chat(self, messages: list[tuple[str, str]]) -> str:
+        lc_messages = [_ROLE_MAP[role](content=content) for role, content in messages]
+        response = self._invoke_with_retry(lc_messages)
+        content = response.content
+        return content if isinstance(content, str) else str(content)
 
     def _rough_prompt_tokens(self, messages: list[BaseMessage]) -> int:
         """Cheap upper-ish bound before a call (Google does not expose remaining quota)."""

@@ -38,12 +38,13 @@ dev = [
 [project.scripts]
 autotest = "main:app"
 autotest-gui = "gui_app:main"
+conversation-qa = "conversation_qa.cli:main"
 
 [tool.setuptools]
 py-modules = ["main", "gui_app"]
 
 [tool.setuptools.packages.find]
-include = ["autotest_agent*"]
+include = ["autotest_agent*", "conversation_qa*"]
 
 [tool.ruff]
 line-length = 100
